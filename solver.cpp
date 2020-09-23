@@ -24,6 +24,7 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
+#include <deal.II/numerics/data_out_faces.h>
 
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/full_matrix.h>
@@ -54,11 +55,8 @@ namespace wavepinning{
 	  private:
 		    void   make_grid_and_dofs();
 		    void   assemble_system();
-		    // void   assemble_rhs_S();
-		    // double get_maximal_velocity() const;
 		    void   solve();
-		    // void   project_back_saturation();
-		    void   output_results();
+		    void   output_results() const;
 		    const unsigned int degree;
 		    Triangulation<dim, 3> triangulation;
 		    FESystem<dim, 3>      fe;
@@ -70,9 +68,6 @@ namespace wavepinning{
 			Vector<double> system_rhs;
 		    const unsigned int n_refinement_steps;
 		    DiscreteTime time;
-		    // BlockVector<double> solution;
-		    // BlockVector<double> old_solution;
-		    // BlockVector<double> system_rhs;
 	};
 
 	template <int dim>
@@ -130,7 +125,7 @@ namespace wavepinning{
 				for (const unsigned int i : fe_values.dof_indices()){
 					for (const unsigned int j : fe_values.dof_indices()){
 						M(i, j) += (fe_values.shape_value(i, q_index) * fe_values.shape_value(j, q_index) * fe_values.JxW(q_index));
-		    			K(i, j) += (fe_values.shape_grad(i, q_index) * fe_values.shape_grad(j, q_index) * fe_values.JxW(q_index));
+						K(i, j) += (fe_values.shape_grad(i, q_index) * fe_values.shape_grad(j, q_index) * fe_values.JxW(q_index));
 		    			A(i, j) += M(i, j) + (0.05*0.01*K(i, j));
 		    			M_A(i) += M(i, j) * prev_A(i);
 		    			M_F(i) += M(i, j) * F(i);
@@ -169,8 +164,8 @@ namespace wavepinning{
 	}
 
 	template <int dim>
-	void wpm<dim>::output_results(){
-		DataOut<3> data_out;
+	void wpm<dim>::output_results() const{
+		DataOut<dim, DoFHandler<dim,3>> data_out;
 		data_out.attach_dof_handler(dof_handler);
 		data_out.add_data_vector(solution, "solution");
 		data_out.build_patches();
@@ -218,12 +213,7 @@ namespace wavepinning{
 		MongePatch mp(20.0);
 	    // Triangulation<2, 3> triangulation;
 	    GridGenerator::subdivided_hyper_cube(triangulation, 10, -10.0, 10.0);
-	    GridTools::transform(
-			    [](const Point<3> &in){
-			    return Point<3>(in[0], in[1],
-	                    5.55*std::sin(0.1*PI*in[0])*std::cos(0.1*PI*in[1]));
-			    },
-			    triangulation);
+	    GridTools::transform([](const Point<3> &in){ return Point<3>(in[0], in[1], 5.55*std::sin(0.1*PI*in[0])*std::cos(0.1*PI*in[1]));}, triangulation);
 
 	    GridOut       grid_out;
 	    
