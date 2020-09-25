@@ -24,7 +24,6 @@
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/data_out.h>
-#include <deal.II/numerics/data_out_faces.h>
 
 #include <deal.II/lac/vector.h>
 #include <deal.II/lac/full_matrix.h>
@@ -53,18 +52,25 @@ namespace wavepinning{
 		    void run();
 
 	  private:
+	  		static constexpr unsigned int spacedim = dim + 1;
 		    void   make_grid_and_dofs();
 		    void   assemble_system();
 		    void   solve();
+		    void   calculateMass();
 		    void   output_results() const;
 		    const unsigned int degree;
-		    Triangulation<dim, 3> triangulation;
-		    FESystem<dim, 3>      fe;
-		    DoFHandler<dim, 3>    dof_handler;
+		    Triangulation<dim, spacedim> triangulation;
+		    FESystem<dim, spacedim>      fe;
+		    DoFHandler<dim, spacedim>    dof_handler;
 		    SparsityPattern      sparsity_pattern;
 			SparseMatrix<double> system_matrix;
 			Vector<double> solution;
 			Vector<double> old_solution;
+			Vector<double> time_oldSolution;
+			Vector<double> massA;
+			Vector<double> massB;
+			Vector<double> oldMassB;
+			Vector<double> time_oldMassB;
 			Vector<double> system_rhs;
 		    const unsigned int n_refinement_steps;
 		    DiscreteTime time;
@@ -73,7 +79,7 @@ namespace wavepinning{
 	template <int dim>
 	wpm<dim>::wpm(const unsigned int degree)
     : degree(degree)
-    , fe(FE_Q<dim, 3>(degree), 1)
+    , fe(FE_Q<dim, spacedim>(degree), 1)
     , dof_handler(triangulation)
     , n_refinement_steps(5)
     , time(/*start time*/ 0., /*end time*/ 1.)
@@ -88,24 +94,23 @@ namespace wavepinning{
 		sparsity_pattern.copy_from(dsp);
 		system_matrix.reinit(sparsity_pattern);
 		solution.reinit(dof_handler.n_dofs());
+		massA.reinit(dof_handler.n_dofs());
+		massB.reinit(dof_handler.n_dofs());
 		system_rhs.reinit(dof_handler.n_dofs());
 	}
 
 	template <int dim>
 	void wpm<dim>::assemble_system(){
 		QGauss<dim> quadrature_formula(fe.degree + 1);
-		FEValues<dim, 3> fe_values(fe, quadrature_formula, update_values | update_gradients | update_JxW_values);
+		FEValues<dim, spacedim> fe_values(fe, quadrature_formula, update_values | update_gradients | update_JxW_values);
 		const unsigned int dofs_per_cell = fe.dofs_per_cell;
 
 		FullMatrix<double> M(dofs_per_cell, dofs_per_cell);
 		FullMatrix<double> K(dofs_per_cell, dofs_per_cell);
 		FullMatrix<double> A(dofs_per_cell, dofs_per_cell);
-		Vector<double> F(dofs_per_cell);
-		Vector<double> B(dofs_per_cell);
-		Vector<double> prev_A(dofs_per_cell);
-		Vector<double> prev_B(dofs_per_cell);
-		Vector<double> M_A(dofs_per_cell);
-		Vector<double> M_F(dofs_per_cell);
+		Vector<double> M_A(dof_handler.n_dofs());
+		Vector<double> F(dof_handler.n_dofs());
+		Vector<double> M_F(dof_handler.n_dofs());
 
 		Vector<double>     cell_rhs(dofs_per_cell);
 		FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
@@ -116,9 +121,9 @@ namespace wavepinning{
       		M = 0;
       		K = 0;
       		A = 0;
+      		M_A = 0;
       		F = 0;
-      		prev_A = 0;
-      		prev_B = 0;
+      		M_F = 0;
       		
       		for (const unsigned int q_index : fe_values.quadrature_point_indices()){
 				
@@ -127,26 +132,21 @@ namespace wavepinning{
 						M(i, j) += (fe_values.shape_value(i, q_index) * fe_values.shape_value(j, q_index) * fe_values.JxW(q_index));
 						K(i, j) += (fe_values.shape_grad(i, q_index) * fe_values.shape_grad(j, q_index) * fe_values.JxW(q_index));
 		    			A(i, j) += M(i, j) + (0.05*0.01*K(i, j));
-		    			M_A(i) += M(i, j) * prev_A(i);
-		    			M_F(i) += M(i, j) * F(i);
 		    		}
 		    	}
-
-		    	for (const unsigned int i : fe_values.dof_indices()){
-		    		F(i) += (prev_B(i)*(0.067 + (pow(prev_A(i), 2)/(1.0 + pow(prev_A(i), 2)))) - prev_A(i))/0.05;
-		    		B(i) += M_A(i) + (0.01 * M_F(i));
-		    	}
-
 			}
 
 			cell->get_dof_indices(local_dof_indices);
 
-	        for (const unsigned int i : fe_values.dof_indices())
-				for (const unsigned int j : fe_values.dof_indices())
+	        for (const unsigned int i : fe_values.dof_indices()){
+				for (const unsigned int j : fe_values.dof_indices()){
 					system_matrix.add(local_dof_indices[i], local_dof_indices[j], A(i, j));
-
-            for (const unsigned int i : fe_values.dof_indices())
-				system_rhs(local_dof_indices[i]) += B(i);      
+					M_A(local_dof_indices[i]) += M(i, j) * old_solution(local_dof_indices[i]);
+					F(local_dof_indices[i]) += (oldMassB(local_dof_indices[i])*(0.067 + (pow(old_solution(local_dof_indices[i]), 2)/(1.0 + pow(old_solution(local_dof_indices[i]), 2)))) - old_solution(local_dof_indices[i]))/0.05;
+					M_F(local_dof_indices[i]) += M(i, j) * F(local_dof_indices[i]);
+					system_rhs(local_dof_indices[i]) += M_A(local_dof_indices[i]) + (0.01 * M_F(local_dof_indices[i]));
+				}
+	        }				      
 		}
 
 		// std::map<types::global_dof_index, double> boundary_values;
@@ -164,8 +164,41 @@ namespace wavepinning{
 	}
 
 	template <int dim>
+	void wpm<dim>::calculateMass(){
+		QGauss<dim> quadrature_formula(fe.degree + 1);
+		FEValues<dim, spacedim> fe_values(fe, quadrature_formula, update_values | update_JxW_values);
+		
+		const unsigned int dofs_per_cell = fe.dofs_per_cell;
+		std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
+		Vector<double> areaVec(dofs_per_cell);
+
+		for (const auto &cell : dof_handler.active_cell_iterators()){
+
+			fe_values.reinit(cell);
+      		areaVec = 0;
+      		double totalArea = 0;
+
+      		for (const unsigned int q_index : fe_values.quadrature_point_indices()){
+				for (const unsigned int i : fe_values.dof_indices()){
+					areaVec(i) += fe_values.JxW(q_index);
+					totalArea += areaVec(i);
+				}
+      		}
+
+			cell->get_dof_indices(local_dof_indices);
+
+			for (const unsigned int i : fe_values.dof_indices()){
+				massA(local_dof_indices[i]) += solution(local_dof_indices[i])*areaVec(i);
+				massB(local_dof_indices[i]) += (0.0 - massA(local_dof_indices[i]))/totalArea;
+			}
+				
+		}
+
+	}
+
+	template <int dim>
 	void wpm<dim>::output_results() const{
-		DataOut<dim, DoFHandler<dim,3>> data_out;
+		DataOut<dim, DoFHandler<dim,spacedim>> data_out;
 		data_out.attach_dof_handler(dof_handler);
 		data_out.add_data_vector(solution, "solution");
 		data_out.build_patches();
@@ -210,8 +243,14 @@ namespace wavepinning{
 
 	template <int dim>
 	void wpm<dim>::run(){
+		
+		double changeB;
+		double tol = 1e-8;
+		int iterCount = 0;
+		int maxIterCount = 10;
+		time.set_desired_next_step_size(0.01);
+
 		MongePatch mp(20.0);
-	    // Triangulation<2, 3> triangulation;
 	    GridGenerator::subdivided_hyper_cube(triangulation, 10, -10.0, 10.0);
 	    GridTools::transform([](const Point<3> &in){ return Point<3>(in[0], in[1], 5.55*std::sin(0.1*PI*in[0])*std::cos(0.1*PI*in[1]));}, triangulation);
 
@@ -227,12 +266,41 @@ namespace wavepinning{
 
 	    std::ofstream out("After.vtk");
 	    grid_out.write_vtk(triangulation, out);
-		make_grid_and_dofs();
-		assemble_system();
-		solve();
-		output_results();	
-	}
 
+	    make_grid_and_dofs();
+	    old_solution.reinit(dof_handler.n_dofs());
+	    oldMassB.reinit(dof_handler.n_dofs());
+	    time_oldSolution.reinit(dof_handler.n_dofs());
+	    time_oldMassB.reinit(dof_handler.n_dofs());
+	    time_oldSolution = 0;
+	    time_oldMassB = 0;
+	    
+	    do
+      	{
+        	
+      		old_solution = time_oldSolution;
+      		oldMassB = time_oldMassB;
+
+        	std::cout << "Timestep " << time.get_step_number() + 1 << std::endl;
+		    do{
+		        std::cout << "Iteration No. " << iterCount + 1 << std::endl;
+		        assemble_system();
+		        solve();
+		        calculateMass();
+		        changeB = massB(0) - oldMassB(0);
+		        old_solution = solution;
+		        massB = oldMassB;
+		        // output_results();
+		        std::cout << "Error in B: " << changeB <<std::endl; 	        
+	      	}while ( (changeB > tol) && (iterCount <= maxIterCount) );
+
+	      	time_oldSolution = solution;
+	      	time_oldMassB = massB;
+	      	time.advance_time();
+	      	std::cout << "Now at t=" << time.get_current_time() << ", dt=" << time.get_previous_step_size() << '.' << std::endl << std::endl;
+
+	    }while (time.is_at_end() == false);
+	}
 }
 
 int main()
