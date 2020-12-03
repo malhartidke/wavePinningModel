@@ -106,11 +106,12 @@ namespace wavepinning{
 			Vector<double> solution;                    // Concentration of A for current iteration and time step
 			Vector<double> old_solution;                // Concentration of A for the previous Picart iterative Step
 			Vector<double> time_oldSolution;            // Concentration of A for previous time step
-			Vector<double> massA;                       // Mass of A
-			Vector<double> massB;                       // Mass of B
-			Vector<double> bk;                          // Concentration of B for current iteration and time step
-			Vector<double> old_bk;                      // Concentration of B for the previous Picart iterative Step
-			Vector<double> time_oldbk;					// Concentration of B for previous time step
+			Vector<double> massA;                       // Vector of Mass of A
+			double totalMassA;                          // Total Mass of A
+			double massB;                               // Mass of B
+			double bk;                                  // Concentration of B for current iteration and time step
+			double old_bk;                              // Concentration of B for the previous Picart iterative Step
+			double time_oldbk;					        // Concentration of B for previous time step
 			Vector<double> system_rhs;                  // Initializing the variable for RHS
 		    
 			// Defining a variable for no. of refinement steps for meshing
@@ -230,13 +231,9 @@ namespace wavepinning{
 		// Initialize all the model parameter vectors defined in the class with
 		// appropriate number of elements equalling to total degrees of freedom
 		massA.reinit(dof_handler.n_dofs());
-		massB.reinit(dof_handler.n_dofs());
 		solution.reinit(dof_handler.n_dofs());
 		old_solution.reinit(dof_handler.n_dofs());
 		time_oldSolution.reinit(dof_handler.n_dofs());
-		bk.reinit(dof_handler.n_dofs());
-		old_bk.reinit(dof_handler.n_dofs());
-		time_oldbk.reinit(dof_handler.n_dofs());
 		system_rhs.reinit(dof_handler.n_dofs());
 		
 	}
@@ -278,7 +275,6 @@ namespace wavepinning{
 		// points, the size is equal to number of quadrature points
 		Vector<double> cell_rhs(dofs_per_cell);
 		std::vector<double> old_solution_values(n_q_points);
-		std::vector<double> old_bk_values(n_q_points);
 		std::vector<types::global_dof_index> local_dof_indices(dofs_per_cell);
 		
 		// Looping over all the cells present in the mesh
@@ -293,10 +289,9 @@ namespace wavepinning{
       		F_local = 0;
       		M_F_local = 0;
 
-      		// Retrieving the old values of concentration of A and B at the
+      		// Retrieving the old values of concentration of A at the
       		// quadrature points
       		fe_values.get_function_values(old_solution, old_solution_values);
-      		fe_values.get_function_values(old_bk, old_bk_values);
       		
       		// Looping over the all the quadrature points of each cell
       		for (const unsigned int q_index : fe_values.quadrature_point_indices()){
@@ -323,7 +318,7 @@ namespace wavepinning{
 
 		    			// Assembling the local RHS vector
 		    			M_A_local(i) += M(i, j) * old_solution_values[q_index];
-		    			F_local(i) += (old_bk_values[q_index]*(0.067 + (pow(old_solution_values[q_index], 2)/(1.0 + pow(old_solution_values[q_index], 2)))) - old_solution_values[q_index])/0.05;
+		    			F_local(i) += (old_bk*(0.067 + (pow(old_solution_values[q_index], 2)/(1.0 + pow(old_solution_values[q_index], 2)))) - old_solution_values[q_index])/0.05;
 		    			M_F_local(i) += 0.01 * M(i, j) * F_local(i);
 		    		}
 		    	}
@@ -373,11 +368,8 @@ namespace wavepinning{
 		const unsigned int n_q_points = quadrature_formula.size();
 		
 		// Initializing vectors to store the area and masses
-		Vector<double> areaVec(dofs_per_cell);
+		double area;
 		Vector<double> localMassA(dofs_per_cell);
-		Vector<double> localMassB(dofs_per_cell);
-		Vector<double> localbk(dofs_per_cell);
-		// double ma, mb;
 
 		// Initializing vectors to store concentration values for which it was
 		// solved during this time step
@@ -389,8 +381,6 @@ namespace wavepinning{
 
 			fe_values.reinit(cell);
 			localMassA = 0;
-			localMassB = 0;
-			localbk = 0;
       		fe_values.get_function_values(solution, solution_values);
 
       		for (const unsigned int q_index : fe_values.quadrature_point_indices()){
@@ -399,14 +389,8 @@ namespace wavepinning{
 					// Local mass of A is calculated as,
 					// M_{A} = A_{concentration} * dx
 					localMassA(i) += solution_values[q_index] * fe_values.JxW(q_index);
+					area += fe_values.JxW(q_index); 
 					
-					// Local Mass of B is calculated as,
-					// M_{B} = (1/ no. of quadrature points) - M_{A}
-					localMassB(i) += (1.0/n_q_points) - localMassA(i);
-					
-					// Local concentration of B is calculated as,
-					// B_{concentration} = M_{B} / Area of cell
-					localbk(i) += localMassB(i) / fe_values.JxW(q_index);
 				}
       		}
 
@@ -414,11 +398,21 @@ namespace wavepinning{
 
 			// Transfer the local masses to global masses
 			for (const unsigned int i : fe_values.dof_indices()){
-				massA(local_dof_indices[i]) += localMassA(i);
-				massB(local_dof_indices[i]) += localMassB(i);
-				bk(local_dof_indices[i]) += localbk(i); 
+				massA(local_dof_indices[i]) += localMassA(i); 
 			}			
 		}
+
+		// Calculate the total mass of A by summing mass over each element
+	    for (auto& mA : massA){
+	    	totalMassA += mA;
+	    }
+
+	    // Calculate the total mass of B by summing mass over each element
+		massB = 0 - totalMassA;
+		bk = massB / area; 
+
+		std::cout<<"Total Mass is "<<totalMassA+massB<<std::endl;
+
 	}
 
 
@@ -428,31 +422,13 @@ namespace wavepinning{
 	// total RMS error recursively
 	template <int dim>
 	double wpm<dim>::calculateError(){
-		QGauss<dim> quadrature_formula(fe.degree + 1);
-		FEValues<dim, spacedim> fe_values(fe, quadrature_formula, update_values | update_JxW_values);
-		const unsigned int n_q_points = quadrature_formula.size();
-		std::vector<double> old_bk_values(n_q_points);
-		std::vector<double> bk_values(n_q_points);
-		int iterValue = 1;
+		
 		double err = 0;
-		double rmsError = 0;
 
-		for (const auto &cell : dof_handler.active_cell_iterators()){
-			fe_values.reinit(cell);
-			fe_values.get_function_values(old_bk, old_bk_values);
-			fe_values.get_function_values(bk, bk_values);
+		err = std::abs(bk - old_bk);
 
-			// Looping over the quadrature points to calculate the error
-			for (const unsigned int q_index : fe_values.quadrature_point_indices()){
-				err = bk_values[q_index] - old_bk_values[q_index];
-				rmsError = std::sqrt((((rmsError * rmsError) * (iterValue-1)) + (err*err)) / iterValue);  
-				iterValue += 1;
-			}
-
-		}
-
-		// Return the RMS error for comparison
-		return rmsError;
+		// Return the error for comparison
+		return err;
 	}
 
 
@@ -521,8 +497,6 @@ namespace wavepinning{
 	template <int dim>
 	void wpm<dim>::run(){
 		 
-		double totalMassA, totalMassB;
-		
 		// Defining tolerance for Picard Iteration convergence
 		double tol = 1e-8;
 		
@@ -543,7 +517,7 @@ namespace wavepinning{
 		// Make a geomtery of a hypercube which is divded into smaller cubes
 		// Here in case of dim=2 and spacedim = 3, it will form just a rectangle
 		// with 10 divisions going from -10 to 10
-	    GridGenerator::subdivided_hyper_cube(triangulation, 10, -10.0, 10.0, 1);
+	    GridGenerator::subdivided_hyper_cube(triangulation, 10, -10.0, 10.0);
 	    
 	    // Transform that rectangle by pushing forward the points in the rectangle
 	    GridTools::transform([](const Point<3> &in){ return Point<3>(in[0], in[1], 5.55*std::sin(0.1*PI*in[0])*std::cos(0.1*PI*in[1]));}, triangulation);
@@ -551,31 +525,85 @@ namespace wavepinning{
 		// Storing the grid
 		GridOut grid_out;
 
-		// double face_count = 0;
-		// for (const auto &face : triangulation.active_face_iterators()){
-		// 	if (face->at_boundary()){
-		// 		face_count++ ;
-		// 		std::cout<<"Face Count: "<<face_count<<std::endl;
-		// 		std::cout<<"Vertices per face: "<<GeometryInfo<spacedim>::vertices_per_face<<std::endl;
-		// 		for (unsigned int i = 0; i < GeometryInfo<dim>::vertices_per_face; ++i){
-		// 			Point<spacedim> &v = face->vertex(i);
-		// 			std::cout<<v(0)<<','<<v(1)<<std::endl;
-		// 			std::cout<<face->boundary_id()<<std::endl;
-		// 			// if (((std::abs(v(0)-(-10.0))<1e-5) || (std::abs(v(1)-(-10.0))<1e-5)) && (!(( (std::abs(v(0)-10.0)<1e-5) && (std::abs(v(1)-(-10.0))<1e-5) ) || ( (std::abs(v(0)-(-10.0))<1e-5) && (std::abs(v(1)-10.0)<1e-5) ))) ){
-		// 			// 	face->set_all_boundary_ids(1);						
-		// 			// }
-		// 			// else if ((std::abs(v(0)-10.0)<1e-5) && (std::abs(v(1)-10.0)<1e-5)){
-		// 			// 	face->set_all_boundary_ids(2);
-		// 			// }
-		// 			// else if (std::abs(v(0)-10.0)<1e-5){
-		// 			// 	face->set_all_boundary_ids(3);
-		// 			// }
-		// 			// else{
-		// 			// 	face->set_all_boundary_ids(4);
-		// 			// }
-		// 		}
-		// 	}
-		// }
+		// Iterating over all the faces to assign boundary conditions
+		// We will be assigning boundary ids over the coarsest mesh
+		for (const auto &face : triangulation.active_face_iterators()){
+			
+			// Check if the face is at boundary
+			// We cannot assign boundary ids to internal faces
+			if (face->at_boundary()){
+
+				// Iterate over all the vertices of the face
+				for (unsigned int i = 0; i < GeometryInfo<dim>::vertices_per_face; ++i){
+					
+					// Get the co-oridnates of the vertex
+					Point<spacedim> &v = face->vertex(i);
+
+					// If the vertex is not the top right corner or bottom left corner 
+					if (!( ( (std::abs(v(0)-(-10.0)) < 1e-5) && (std::abs(v(1)-(-10.0)) < 1e-5) ) || ( (std::abs(v(0)-(10.0)) < 1e-5) && (std::abs(v(1)-(10.0)) < 1e-5) ) )){
+						
+						// If the vertex lies on left vertical line
+						if ( (std::abs(v(0)-(-10.0)) < 1e-5) && ((v(1) - (-8.0)) > 0.0) && ((v(1) - 8.0) < 0.0)) {
+							face->set_all_boundary_ids(1);
+						}
+
+						// If the vertex lies on right vertical line
+						else if ( (std::abs(v(0)-(10.0)) < 1e-5) && ((v(1) - (-8.0)) > 0.0) && ((v(1) - 8.0) < 0.0)) {
+							face->set_all_boundary_ids(2);
+						}
+
+						// If the vertex lies on upper horizontal line
+						else if ( (std::abs(v(1)-(10.0)) < 1e-5) && ((v(0) - (-8.0)) > 0.0) && ((v(0) - 8.0) < 0.0)){
+							face->set_all_boundary_ids(3);
+						}
+
+						// If the vertex lies on bottom horizontal line
+						else if ( (std::abs(v(1)-(-10.0)) < 1e-5) && ((v(0) - (-8.0)) > 0.0) && ((v(0) - 8.0) < 0.0)) {
+							face->set_all_boundary_ids(4);
+						}
+
+						// If it lies anywhere else, assign nothing
+						else{
+							continue;	
+						}
+					}
+
+					// If the vertex lies on the top left corner
+					else if ( (std::abs(v(0)-(10.0)) < 1e-5) && (std::abs(v(1)-(10.0)) < 1e-5) ){
+						
+						// Take a look at other vertex on that face
+						Point<spacedim> &vOther = face->vertex(0);
+
+						// If the other vertex lies on upper horizontal line, but near top right corner
+						if ( (std::abs(vOther(1)-(10.0)) < 1e-5) && ((vOther(0) - 8.0) >= 0.0)) {
+							face->set_all_boundary_ids(5);
+						}
+
+						// If the other vertex lies on right vertical line, but near top right corner
+						else{
+							face->set_all_boundary_ids(7);
+						}
+					}
+
+					// If the vertex lies on the bottom right corner
+					else{
+
+						// Take a look at other vertex on that face
+						Point<spacedim> &vOther = face->vertex(1);
+
+						// If the other vertex lies on bottom horizontal line, but near bottom left corner
+						if ( (std::abs(vOther(1)-(-10.0)) < 1e-5) && ((vOther(0) - (-8.0)) <= 0.0)) {
+							face->set_all_boundary_ids(6);
+						}
+
+						// If the other vertex lies on left vertical line, but near bottom left corner
+						else{
+							face->set_all_boundary_ids(8);
+						}	
+					}
+				}
+			}
+		}
 
 		// Setting the manifold for the triangulation so that for further.
 		// refinement it can calculate where to place the new vertices
@@ -585,20 +613,6 @@ namespace wavepinning{
 	    for (const auto &cell : triangulation.active_cell_iterators())
 	    	cell->set_all_manifold_ids(0);
 
-	    {
-		  std::map<types::boundary_id, unsigned int> boundary_count;
-		  for (const auto &face : triangulation.active_face_iterators()){
-		  	if (face->at_boundary()){
-		  		boundary_count[face->boundary_id()]++;	
-		  	}	
-		  }
-		  std::cout << " boundary indicators: ";
-		  for (const std::pair<const types::boundary_id, unsigned int> &pair : boundary_count){
-		  	std::cout << pair.first << "(" << pair.second << " times) ";
-		  }
-		  std::cout << std::endl;
-		}
-
 		// Refine the mesh 
 	    // triangulation.refine_global(4 - dim);  
 
@@ -607,11 +621,84 @@ namespace wavepinning{
 	    // Extract variables for which periodic boundary is to be used
 	    FEValuesExtractors::Scalar concentration(0);
 
-	    // Define a vector to store the periodic faces
-	    std::vector<GridTools::PeriodicFacePair<typename DoFHandler<dim, spacedim>::cell_iterator>> periodicity_vector1;
-		
+	    // Define vectors to store the periodic faces
+		std::vector<GridTools::PeriodicFacePair<typename DoFHandler<dim, spacedim>::cell_iterator>> periodicity_vector_verticalCorner;
+		std::vector<GridTools::PeriodicFacePair<typename DoFHandler<dim, spacedim>::cell_iterator>> periodicity_vector_horizontalCorner;
+
+	    // We need to define rotational matrices and offset vectors to rotate 
+	    // the upper/right horizontal/vertical lines by 180 deg to match 
+	    // the bottom/left horizontal/vertical lines. 
+	    // This will ensure that top right corner matches with the 
+	    // bottom left corner for desired periodicity
+
+	    // Eg: Here, we define a rotational matrix to rotate boundary with 
+	    // boundary id of 5 by 180 deg to match it with a boundary with 
+	    // boundary id 6 
+	    FullMatrix<double> matrixHorizontal(3);
+	    matrixHorizontal[0][0] = -1.;
+		matrixHorizontal[0][1] = 1.8;
+		matrixHorizontal[0][2] = 0.;
+		matrixHorizontal[1][0] = 0.;
+		matrixHorizontal[1][1] = 1.;
+		matrixHorizontal[1][2] = 0.;
+		matrixHorizontal[2][0] = 0.;
+		matrixHorizontal[2][1] = 0.;
+		matrixHorizontal[2][2] = -1.;
+
+		// Eg: Here, we define a offset vector to offset boundary with 
+	    // boundary id of 5 by 18.0 units towards left to match it with 
+	    // a boundary with boundary id 6
+		Tensor<1, spacedim> offsetHorizontal;
+		offsetHorizontal[0] = -18.0;
+		offsetHorizontal[1] = 0.0;
+		offsetHorizontal[2] = 0.0;
+
+		// Eg: Here, we define a rotational matrix to rotate boundary with 
+	    // boundary id of 7 by 180 deg to match it with a boundary with 
+	    // boundary id 8
+	    FullMatrix<double> matrixVertical(3);
+	    matrixVertical[0][0] = 1.;
+		matrixVertical[0][1] = 0.;
+		matrixVertical[0][2] = 0.;
+		matrixVertical[1][0] = 1.8;
+		matrixVertical[1][1] = -1.;
+		matrixVertical[1][2] = 0.;
+		matrixVertical[2][0] = 0.;
+		matrixVertical[2][1] = 0.;
+		matrixVertical[2][2] = -1.;
+
+		// Eg: Here, we define a offset vector to offset boundary with 
+	    // boundary id of 7 by 18.0 units downward to match it with 
+	    // a boundary with boundary id 8
+		Tensor<1, spacedim> offsetVertical;
+		offsetVertical[0] = 0.0;
+		offsetVertical[1] = -18.0;
+		offsetVertical[2] = 0.0;
+
 	    // Define the direction along which the periodicity is enforced
-		const unsigned int direction1 = 0;
+	    // 0: Along X
+	    // 1: Along Y
+		const unsigned int direction_vertical = 0;
+		const unsigned int direction_horizontal = 1;
+		const unsigned int direction_verticalCorner = 0;
+		const unsigned int direction_horizontalCorner = 1;
+
+		// We manually match the faces by specifying rotational matrix
+		// and offset vector for the case of boundary id = 5,6,7 and 8
+		// For other boundary ids, the matching is straight forward and thus
+		// we need not manually match the faces. So, we directly enforce 
+		// the periodic boundary conditions for those boundary ids.
+		// This function collects the periodic faces by checking if they match
+		// for the given direction
+		// The condition checked is: 
+		// (Rotational_Matrix * Vertex_{5/7(x,y,z)}) + Offest - Vertex_{6/8(x,y,z)}) == [a, b, c]
+		// The resulting vector should always be parallel to the direction vector
+		// If direction vector is 0, then b = c = 0
+		// If direction vector is 1, then a = c = 0
+		// If this condition is not satisfied, check the rotational matrix
+		// Periodic faces are collected in the vector passed as an argument
+		GridTools::collect_periodic_faces(dof_handler, 5, 6, direction_horizontalCorner, periodicity_vector_horizontalCorner, offsetHorizontal, matrixHorizontal);
+		GridTools::collect_periodic_faces(dof_handler, 7, 8, direction_verticalCorner, periodicity_vector_verticalCorner, offsetVertical, matrixVertical);
 
 		// Define the constraints
     	AffineConstraints<double> constraints;
@@ -619,20 +706,26 @@ namespace wavepinning{
     	// Initialize the constraints to nothing
     	constraints.clear();
 
-    	// Make periodic faces based on the triangulation, boundary ids, direction
-    	// and variables
-    	DoFTools::make_periodicity_constraints(dof_handler, 0, 1, direction1, constraints, fe.component_mask(concentration));
+    	// Here, we enforce periodic conditions on the boundaries with
+    	// boundary id = 1,2,3 and 4
+    	// Here, it will automatically match the faces, since it is straight forward
+    	// without any rotation or offset involved
+    	DoFTools::make_periodicity_constraints(dof_handler, 1, 2, direction_vertical, constraints, fe.component_mask(concentration));
+    	DoFTools::make_periodicity_constraints(dof_handler, 3, 4, direction_horizontal, constraints, fe.component_mask(concentration));
+    	
+    	// Here we enforce the periodic boundary conditions on the faces matched
+    	// earlier
+    	// !! NOTE: This function is only instantiated for dim != spacedim from 9.3.0 pre !!
+    	// !! Source code needs to be slightly altered for earlier versions !!
+    	DoFTools::make_periodicity_constraints<dim, spacedim>(periodicity_vector_horizontalCorner, constraints, fe.component_mask(concentration));
+    	DoFTools::make_periodicity_constraints<dim, spacedim>(periodicity_vector_verticalCorner, constraints, fe.component_mask(concentration));
+
+    	// Close the constraints as we have finalized them
     	constraints.close();
         
     	// Project the initial values over the whole domain
         VectorTools::project(dof_handler, constraints, QGauss<dim>(degree + 1), InitialValues<spacedim>(), time_oldSolution);
         
-
-        // DoFTools::make_periodicity_constraints<dim, spacedim>(dof_handler, 0, 1, direction1, constraints, fe.component_mask(concentration));
- //        DoFTools::make_periodicity_constraints(periodicity_vector2, constraints);
- //        DoFTools::make_periodicity_constraints(periodicity_vector3, constraints);
-    	
-
 	    // Get the solution of previous time step
 	    solution = time_oldSolution;
 	    
@@ -641,20 +734,10 @@ namespace wavepinning{
 	    
 	    time_oldbk = bk;
 
-	    // Calculate the total mass of A by summing mass over each element
-	    for (auto& mA : massA){
-	    	totalMassA += mA;
-	    }
-
-	    // Calculate the total mass of B by summing mass over each element
-		for (auto& mB : massB){
-			totalMassB += mB;
-		}
-
 		// Here we loop over time steps and for each time step, we loop over
 		// Picard Iteration to solve the model
 	    std::cout << "Inital Timestep: " << std::endl;
-	    std::cout << "Mass of A="<< totalMassA << ", Mass of B=" << totalMassB << ", Minimum concentration of A=" << *std::min_element(solution.begin(), solution.end()) << ", Maximum concentration of A="<< *std::max_element(solution.begin(), solution.end()) <<", Concentration of B=" << bk(0) << std::endl;
+	    std::cout << "Mass of A="<< totalMassA << ", Mass of B=" << massB << ", Minimum concentration of A=" << *std::min_element(solution.begin(), solution.end()) << ", Maximum concentration of A="<< *std::max_element(solution.begin(), solution.end()) <<", Concentration of B=" << bk << std::endl;
 	    time.advance_time();
 
 	    // Looping over time. Loop will keep until the time steps are over
@@ -665,7 +748,9 @@ namespace wavepinning{
       		old_bk = time_oldbk;
       		changeB = 0;
       		totalMassA = 0;
-      		totalMassB = 0;
+      		massB = 0;
+      		bk = 0;
+      		iterCount = 0;
 
         	std::cout << "Timestep " << time.get_step_number() << std::endl;
 		    
@@ -685,17 +770,10 @@ namespace wavepinning{
 		        std::cout << "Error in B: " << changeB <<std::endl; 	        
 	      	}while ( (changeB > tol) && (iterCount <= maxIterCount) );
 
-
-	      	// Here we calculate the total masses for both 
-	      	calculateMass();
 	      	time_oldSolution = solution;
 	      	time_oldbk = bk;
-	      	for (auto& mA : massA)
-			    totalMassA += mA;
-			for (auto& mB : massB)
-			    totalMassB += mB;
 	      	std::cout << "Now at t=" << time.get_current_time() << ", dt=" << time.get_previous_step_size() << '.' << std::endl;
-	      	std::cout << "Mass of A="<< totalMassA << ", Mass of B=" << totalMassB << ", Minimum concentration of A=" << *std::min_element(solution.begin(), solution.end()) << ", Maximum concentration of A="<< *std::max_element(solution.begin(), solution.end()) <<", Concentration of B" << bk(0) << std::endl << std::endl;
+	      	std::cout << "Mass of A="<< totalMassA << ", Mass of B=" << massB << ", Minimum concentration of A=" << *std::min_element(solution.begin(), solution.end()) << ", Maximum concentration of A="<< *std::max_element(solution.begin(), solution.end()) <<", Concentration of B" << bk << std::endl << std::endl;
 	      	time.advance_time();
 
 	    }while (time.is_at_end() == false);
