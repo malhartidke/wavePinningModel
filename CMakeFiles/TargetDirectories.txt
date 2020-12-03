@@ -1,0 +1,3 @@
+/media/malhar/C8D6071FD6070D7E/PDFs/Academic/BITS/SEM III/SAT/Codes/wavePinningModel/CMakeFiles/rebuild_cache.dir
+/media/malhar/C8D6071FD6070D7E/PDFs/Academic/BITS/SEM III/SAT/Codes/wavePinningModel/CMakeFiles/edit_cache.dir
+/media/malhar/C8D6071FD6070D7E/PDFs/Academic/BITS/SEM III/SAT/Codes/wavePinningModel/CMakeFiles/solver.dir
